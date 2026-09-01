@@ -66,8 +66,60 @@ function DelegateView() {
   const [notice, setNotice] = useState("");
   const [delegateName, setDelegateName] = useState("");
   const [submitState, setSubmitState] = useState({ status: "idle", message: "" });
-  const [submissionId, setSubmissionId] = useState(null);
+  const [submissionId, setSubmissionId] = useState(() => {
+    try { return localStorage.getItem("tayside-workshop-submission-id") || null; } catch { return null; }
+  });
   const isReview = activeBridge === bridges.length;
+
+  useEffect(() => {
+    try {
+      const savedName = localStorage.getItem("tayside-workshop-delegate-name");
+      if (savedName) setDelegateName(savedName);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!submissionId) return;
+    let cancelled = false;
+    const restore = async () => {
+      const { data, error } = await supabase
+        .from("submission_cards")
+        .select("bridge_index, card_key, celebration, improvement, transformation, connect, narrative")
+        .eq("submission_id", submissionId);
+      if (error || cancelled || !data?.length) return;
+      setResponses((current) => {
+        const next = { ...current };
+        data.forEach((row) => {
+          if (!next[row.bridge_index]?.cards?.[row.card_key]) return;
+          next[row.bridge_index] = {
+            ...next[row.bridge_index],
+            saved: true,
+            cards: {
+              ...next[row.bridge_index].cards,
+              [row.card_key]: {
+                tokens: {
+                  celebration: row.celebration || 0,
+                  improvement: row.improvement || 0,
+                  transformation: row.transformation || 0,
+                  connect: row.connect || 0,
+                },
+                narrative: row.narrative || "",
+              },
+            },
+          };
+        });
+        return next;
+      });
+    };
+    restore();
+    return () => { cancelled = true; };
+  }, [submissionId]);
+
+  useEffect(() => {
+    try {
+      if (delegateName.trim()) localStorage.setItem("tayside-workshop-delegate-name", delegateName.trim());
+    } catch {}
+  }, [delegateName]);
 
   const totals = useMemo(() => {
     const t = emptyTokens();
@@ -123,17 +175,19 @@ function DelegateView() {
     }
 
     try {
-      const payload = {};
-      cardKeys.forEach((k) => { payload[k] = responses[activeBridge].cards[k]; });
-
+      const fullPayload = {};
+      bridges.forEach((_, bridgeIndex) => {
+        fullPayload[bridgeIndex] = responses[bridgeIndex].cards;
+      });
       if (!submissionId) {
         const { data: sub, error: subError } = await supabase
           .from("submissions")
-          .insert({ delegate_name: delegateName.trim() || null, payload })
+          .insert({ delegate_name: delegateName.trim() || null, payload: fullPayload })
           .select("id")
           .single();
         if (subError) throw subError;
         setSubmissionId(sub.id);
+        try { localStorage.setItem("tayside-workshop-submission-id", sub.id); } catch {}
 
         const cardRows = cardKeys.map((k) => {
           const card = responses[activeBridge].cards[k];
@@ -184,9 +238,8 @@ function DelegateView() {
           }
         }
 
-        const fullPayload = {};
-        cardKeys.forEach((k) => { fullPayload[k] = responses[activeBridge].cards[k]; });
-        await supabase.from("submissions").update({ payload: fullPayload }).eq("id", submissionId);
+        const { error: payloadError } = await supabase.from("submissions").update({ payload: fullPayload, delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() }).eq("id", submissionId);
+        if (payloadError) throw payloadError;
       }
 
       setResponses((r) => ({ ...r, [activeBridge]: { ...r[activeBridge], saved: true } }));
@@ -495,4 +548,3 @@ function FacilitatorView() {
 export default App;
 
 
-export default App
