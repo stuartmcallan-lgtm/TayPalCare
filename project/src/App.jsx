@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient";
 
 const tokenTypes = [
@@ -30,6 +31,17 @@ const cardKeys = ["A", "B", "C", "D"];
 const emptyTokens = () => ({ celebration: 0, improvement: 0, transformation: 0, connect: 0 });
 const emptyCard = () => ({ tokens: emptyTokens(), narrative: "" });
 const emptyResponses = () => bridges.reduce((acc, _, index) => ({ ...acc, [index]: { cards: { A: emptyCard(), B: emptyCard(), C: emptyCard(), D: emptyCard() }, saved: false } }), {});
+
+function saveXlsx(rows, filename, sheetName) {
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = rows[0].map((_, i) => {
+    const maxLen = Math.max(...rows.map((r) => String(r[i] ?? "").length));
+    return { wch: Math.min(Math.max(maxLen + 2, 10), 60) };
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName || "Sheet1");
+  XLSX.writeFile(wb, filename);
+}
 
 function App() {
   const [mode, setMode] = useState("delegate");
@@ -114,16 +126,14 @@ function DelegateView() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const downloadCsv = () => {
+  const downloadXlsx = () => {
     const rows = [["Bridge", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Narrative"]];
     bridges.forEach((bridge, b) => cardKeys.forEach((k) => {
       const card = responses[b].cards[k];
       const meta = cardMeta.find((c) => c.key === k);
       rows.push([`Bridge ${b + 1}: ${bridge.title}`, `Card ${k}`, meta.label, ...tokenTypes.map((t) => card.tokens[t.id]), card.narrative.replaceAll("\n", " ")]);
     }));
-    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    const link = document.createElement("a"); link.href = url; link.download = "tayside-together-workshop.csv"; link.click(); URL.revokeObjectURL(url);
+    saveXlsx(rows, "tayside-together-workshop.xlsx", "My Responses");
   };
   const printReport = () => window.print();
 
@@ -178,8 +188,8 @@ function DelegateView() {
       <div className="token-counters">{tokenTypes.map((type) => <div className={`token-counter ${type.color}`} key={type.id}><div className="token-counter-top"><span className="token-dot"/><strong>{type.short}</strong><b>{totals[type.id]} / {type.limit}</b></div><div className="meter"><span style={{ width: `${(totals[type.id] / type.limit) * 100}%` }}/></div></div>)}</div>
     </section>
     <main className="content">
-      <nav className="stepper" aria-label="Palliative care journey stages">{bridges.map((bridge, index) => <button key={bridge.title} className={`step ${index === activeBridge ? "active" : ""} ${responses[index].saved ? "complete" : ""}`} onClick={() => setActiveBridge(index)}><span className="step-number">{responses[index].saved ? "✓" : index + 1}</span><span className="step-label">{bridge.title}</span></button>)}<button className={`step review-step ${isReview ? "active" : ""}`} onClick={() => setActiveBridge(8)}><span className="step-number">↗</span><span className="step-label">Review & submit</span></button></nav>
-      {isReview ? <Review totals={totals} totalSpent={totalSpent} responses={responses} onCsv={downloadCsv} onPrint={printReport} delegateName={delegateName} setDelegateName={setDelegateName} submitState={submitState} onSubmit={submitWorkshop} /> : <BridgeView bridge={bridges[activeBridge]} index={activeBridge} response={responses[activeBridge]} onToken={updateToken} onNarrative={updateNarrative} onSave={saveAndContinue} notice={notice} bridgeTokenCount={bridgeTokenCount(activeBridge)} />}
+      <nav className="stepper" aria-label="Palliative care journey stages">{bridges.map((bridge, index) => <button key={bridge.title} className={`step ${index === activeBridge ? "active" : ""} ${responses[index].saved ? "complete" : ""}`} onClick={() => setActiveBridge(index)}><span className="step-number">{responses[index].saved ? "✓" : index + 1}</span><span className="step-label">{bridge.title}</span></button>)}<button className={`step review-step ${isReview ? "active" : ""}`} onClick={() => setActiveBridge(bridges.length)}><span className="step-number">↗</span><span className="step-label">Review & submit</span></button></nav>
+      {isReview ? <Review totals={totals} totalSpent={totalSpent} responses={responses} onXlsx={downloadXlsx} onPrint={printReport} delegateName={delegateName} setDelegateName={setDelegateName} submitState={submitState} onSubmit={submitWorkshop} /> : <BridgeView bridge={bridges[activeBridge]} index={activeBridge} response={responses[activeBridge]} onToken={updateToken} onNarrative={updateNarrative} onSave={saveAndContinue} notice={notice} bridgeTokenCount={bridgeTokenCount(activeBridge)} />}
     </main>
   </>;
 }
@@ -224,7 +234,7 @@ function BridgeView({ bridge, index, response, onToken, onNarrative, onSave, not
       </article>
       <article className="card matters">
         <div className="card-label"><span className="label-icon">02</span><div><small>CARD B</small><h2>What matters most?</h2></div></div>
-        <div className="quote-mark">“</div><blockquote>{bridge.quote}</blockquote><div className="matter-list">{bridge.matters.map((item) => <span key={item}>{item}</span>)}</div>
+        <div className="quote-mark">"</div><blockquote>{bridge.quote}</blockquote><div className="matter-list">{bridge.matters.map((item) => <span key={item}>{item}</span>)}</div>
         <CardAllocation cardKey="B" card={response.cards.B} onToken={onToken} onNarrative={onNarrative} />
       </article>
       <article className="card services">
@@ -241,12 +251,12 @@ function BridgeView({ bridge, index, response, onToken, onNarrative, onSave, not
     {notice && <div className="notice" role="alert">{notice}</div>}
     <div className="action-row">
       <span>{bridgeTokenCount} tokens on this bridge · {response.saved ? "Saved — revisit any time." : "Unsaved changes"}</span>
-      <button className="primary-button" onClick={onSave}>{index === 7 ? "Save & review" : "Save & continue"}<span>→</span></button>
+      <button className="primary-button" onClick={onSave}>{index === bridges.length - 1 ? "Save & review" : "Save & continue"}<span>→</span></button>
     </div>
   </>;
 }
 
-function Review({ totals, totalSpent, responses, onCsv, onPrint, delegateName, setDelegateName, submitState, onSubmit }) {
+function Review({ totals, totalSpent, responses, onXlsx, onPrint, delegateName, setDelegateName, submitState, onSubmit }) {
   const narratives = bridges.reduce((sum, _, b) => sum + cardKeys.filter((k) => responses[b].cards[k].narrative.trim()).length, 0);
   return <section className="review-page">
     <div className="hero"><div className="hero-kicker">WORKSHOP CLOSE</div><h1>Review <span>—</span> your collective priorities</h1><p>Review your investment across the whole journey, then submit your responses to the facilitator and export a shareable record.</p></div>
@@ -269,7 +279,7 @@ function Review({ totals, totalSpent, responses, onCsv, onPrint, delegateName, s
       {submitState.status === "success" && <div className="success-notice" role="status">{submitState.message}</div>}
       <button className="primary-button submit-btn" onClick={onSubmit} disabled={submitState.status === "submitting" || submitState.status === "success"}>{submitState.status === "submitting" ? "Submitting..." : submitState.status === "success" ? "Submitted ✓" : "Submit responses"}<span>→</span></button>
     </div>
-    <div className="export-card"><div><span className="eyebrow">READY TO SHARE</span><h2>Take the conversation with you</h2><p>Export all eight stages, every card's token choices, and narrative suggestions in a structured report.</p></div><div className="export-actions"><button className="secondary-button" onClick={onCsv}>Download CSV <span>↓</span></button><button className="primary-button" onClick={onPrint}>Download PDF report <span>↓</span></button></div></div>
+    <div className="export-card"><div><span className="eyebrow">READY TO SHARE</span><h2>Take the conversation with you</h2><p>Export all eight stages, every card's token choices, and narrative suggestions in a structured report.</p></div><div className="export-actions"><button className="secondary-button" onClick={onXlsx}>Download Excel <span>↓</span></button><button className="primary-button" onClick={onPrint}>Download PDF report <span>↓</span></button></div></div>
   </section>;
 }
 
@@ -278,22 +288,79 @@ function FacilitatorView() {
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [livePulse, setLivePulse] = useState(false);
+  const channelRef = useRef(null);
 
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+
+    const loadData = async () => {
       try {
         const { data: subs, error: subError } = await supabase.from("submissions").select("id, delegate_name, submitted_at").order("submitted_at", { ascending: false });
         if (subError) throw subError;
         const { data: cardRows, error: cardError } = await supabase.from("submission_cards").select("submission_id, bridge_index, card_key, celebration, improvement, transformation, connect, narrative");
         if (cardError) throw cardError;
+        if (cancelled) return;
         setSubmissions(subs || []);
         setCards(cardRows || []);
       } catch (err) {
-        setError("Could not load results. Please try again.");
+        if (!cancelled) setError("Could not load results. Please try again.");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    })();
+    };
+
+    loadData();
+
+    const channel = supabase
+      .channel("submission_cards_changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "submission_cards" }, (payload) => {
+        setLivePulse(true);
+        setTimeout(() => setLivePulse(false), 1500);
+
+        if (payload.eventType === "INSERT" && payload.new) {
+          const row = payload.new;
+          setCards((prev) => {
+            if (prev.some((c) => c.id === row.id)) return prev;
+            return [...prev, row];
+          });
+        } else if (payload.eventType === "UPDATE" && payload.new) {
+          const row = payload.new;
+          setCards((prev) => prev.map((c) => (c.id === row.id ? row : c)));
+        } else if (payload.eventType === "DELETE" && payload.old) {
+          const row = payload.old;
+          setCards((prev) => prev.filter((c) => c.id !== row.id));
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "submissions" }, (payload) => {
+        setLivePulse(true);
+        setTimeout(() => setLivePulse(false), 1500);
+
+        if (payload.eventType === "INSERT" && payload.new) {
+          const row = payload.new;
+          setSubmissions((prev) => {
+            if (prev.some((s) => s.id === row.id)) return prev;
+            return [row, ...prev];
+          });
+        } else if (payload.eventType === "UPDATE" && payload.new) {
+          const row = payload.new;
+          setSubmissions((prev) => prev.map((s) => (s.id === row.id ? row : s)));
+        } else if (payload.eventType === "DELETE" && payload.old) {
+          const row = payload.old;
+          setSubmissions((prev) => prev.filter((s) => s.id !== row.id));
+        }
+      })
+      .subscribe();
+
+    channelRef.current = channel;
+
+    return () => {
+      cancelled = true;
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+    };
   }, []);
 
   const aggregate = useMemo(() => {
@@ -317,7 +384,7 @@ function FacilitatorView() {
 
   const totalTokens = Object.values(aggregate.byType).reduce((s, v) => s + v, 0);
 
-  const downloadAggregateCsv = () => {
+  const downloadAggregateXlsx = () => {
     const rows = [["Bridge", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "Narratives"]];
     bridges.forEach((bridge, b) => cardKeys.forEach((k) => {
       const meta = cardMeta.find((c) => c.key === k);
@@ -326,22 +393,44 @@ function FacilitatorView() {
       const narText = agg.narratives.map((n) => `${n.delegate || "Anonymous"}: ${n.narrative}`).join(" | ").replaceAll("\n", " ");
       rows.push([`Bridge ${b + 1}: ${bridge.title}`, `Card ${k}`, meta.label, agg.celebration, agg.improvement, agg.transformation, agg.connect, total, narText]);
     }));
-    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    const link = document.createElement("a"); link.href = url; link.download = "tayside-together-aggregate.csv"; link.click(); URL.revokeObjectURL(url);
+    saveXlsx(rows, "tayside-together-aggregate.xlsx", "Aggregate Results");
+  };
+
+  const downloadIndividualXlsx = () => {
+    const rows = [["Delegate", "Bridge", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "Narrative"]];
+    cards.forEach((c) => {
+      const sub = submissions.find((s) => s.id === c.submission_id);
+      const meta = cardMeta.find((m) => m.key === c.card_key);
+      const bridge = bridges[c.bridge_index];
+      const total = c.celebration + c.improvement + c.transformation + c.connect;
+      rows.push([
+        sub?.delegate_name || "Anonymous",
+        `Bridge ${c.bridge_index + 1}: ${bridge?.title || ""}`,
+        `Card ${c.card_key}`,
+        meta?.label || "",
+        c.celebration,
+        c.improvement,
+        c.transformation,
+        c.connect,
+        total,
+        (c.narrative || "").replaceAll("\n", " "),
+      ]);
+    });
+    saveXlsx(rows, "tayside-together-individual.xlsx", "Individual Responses");
   };
 
   if (loading) return <main className="content"><div className="facilitator-loading">Loading results...</div></main>;
   if (error) return <main className="content"><div className="facilitator-loading">{error}</div></main>;
-  if (submissions.length === 0) return <main className="content"><section className="hero"><div className="hero-kicker">FACILITATOR VIEW</div><h1>No submissions yet</h1><p>Once delegates submit their responses, you'll see everyone's tokens combined here.</p></section></main>;
+  if (submissions.length === 0) return <main className="content"><section className="hero"><div className="hero-kicker">FACILITATOR VIEW</div><h1>No submissions yet</h1><p>Once delegates submit their responses, you'll see everyone's tokens combined here. The view updates live as submissions arrive.</p><div className="live-badge"><span className="live-dot" /> Live monitoring active</div></section></main>;
 
   return <main className="content">
     <section className="hero"><div className="hero-kicker">FACILITATOR VIEW</div><h1>Aggregate results <span>—</span> all delegates</h1><p>{submissions.length} {submissions.length === 1 ? "delegate has" : "delegates have"} submitted, with {totalTokens} tokens allocated across the journey.</p></section>
+    <div className={`live-badge ${livePulse ? "pulse" : ""}`}><span className="live-dot" /> {livePulse ? "Live update received" : "Live monitoring active"}</div>
     <div className="review-summary">
       <div><span className="eyebrow">TOTAL TOKENS</span><strong>{totalTokens}</strong><p>Across all {submissions.length} submissions</p></div>
       <div className="summary-bars">{tokenTypes.map((type) => <div className="summary-bar" key={type.id}><div><span className={`token-dot ${type.color}`} /><strong>{type.label}</strong><b>{aggregate.byType[type.id]}</b></div><div className="meter"><span className={type.color} style={{ width: `${aggregate.byType[type.id] > 0 ? Math.min((aggregate.byType[type.id] / (type.limit * submissions.length)) * 100, 100) : 0}%` }} /></div></div>)}</div>
     </div>
-    <div className="review-table-wrap"><div className="section-heading"><div><span className="eyebrow">FULL JOURNEY</span><h2>Combined bridge-by-bridge results</h2></div><button className="secondary-button" onClick={downloadAggregateCsv}>Download aggregate CSV <span>↓</span></button></div>
+    <div className="review-table-wrap"><div className="section-heading"><div><span className="eyebrow">FULL JOURNEY</span><h2>Combined bridge-by-bridge results</h2></div><div className="export-actions"><button className="secondary-button" onClick={downloadIndividualXlsx}>Individual Excel <span>↓</span></button><button className="secondary-button" onClick={downloadAggregateXlsx}>Aggregate Excel <span>↓</span></button></div></div>
       <div className="review-table">
         <div className="table-row table-head"><span>Bridge & card</span>{tokenTypes.map((type) => <span key={type.id}>{type.short}</span>)}<span>Total</span><span>Narratives</span></div>
         {bridges.map((bridge, b) => {
