@@ -178,7 +178,6 @@ function DelegateView() {
     for (const k of cardKeys) {
       const card = bridgeResp.cards[k];
       const meta = cardMeta.find((c) => c.key === k);
-      if (!Object.values(card.tokens).some(Boolean)) continue;
       if (!card.allocationReference.trim()) {
         setNotice(`Please complete “What specifically are you allocating your tokens to?” for Card ${k} (${meta.label}).`);
         return false;
@@ -345,11 +344,11 @@ function CardAllocation({ cardKey, card, onToken, onAllocationReference, onNarra
       <div className="mini-alloc-row">
         {tokenTypes.map((type) => <MiniToken key={type.id} type={type} count={card.tokens[type.id]} onAdd={() => onToken(cardKey, type.id, 1)} onRemove={() => onToken(cardKey, type.id, -1)} />)}
       </div>
-      <label className="card-text-label">What specifically are you allocating your tokens to? {hasTokens ? <span>Required</span> : <span className="optional-tag">Optional</span>}
-        <textarea className="card-narrative" value={card.allocationReference} onChange={(e) => onAllocationReference(cardKey, e.target.value)} placeholder={`Be specific about the part of this card you are referring to · ${meta.label.toLowerCase()}`} required={hasTokens} />
+      <label className="card-text-label">What specifically are you allocating your tokens to? <span>Required</span>
+        <textarea className="card-narrative" value={card.allocationReference} onChange={(e) => onAllocationReference(cardKey, e.target.value)} placeholder={`Be specific about the part of this card you are referring to · ${meta.label.toLowerCase()}`} required />
       </label>
-      <label className="card-text-label">Why are you allocating your tokens here? {hasTokens ? <span>Required</span> : <span className="optional-tag">Optional</span>}
-        <textarea className="card-narrative" value={card.narrative} onChange={(e) => onNarrative(cardKey, e.target.value)} placeholder="Explain your thoughts, experience or reason for the allocation" required={hasTokens} />
+      <label className="card-text-label">Why are you allocating your tokens here? <span>Required</span>
+        <textarea className="card-narrative" value={card.narrative} onChange={(e) => onNarrative(cardKey, e.target.value)} placeholder="Explain your thoughts, experience or reason for the allocation" required />
       </label>
     </div>
   );
