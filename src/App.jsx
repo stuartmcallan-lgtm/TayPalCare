@@ -29,7 +29,7 @@ const bridges = [
 
 const cardKeys = ["A", "B", "C", "D"];
 const emptyTokens = () => ({ celebration: 0, improvement: 0, transformation: 0, connect: 0 });
-const emptyCard = () => ({ tokens: emptyTokens(), narrative: "" });
+const emptyCard = () => ({ tokens: emptyTokens(), allocationReference: "", narrative: "" });
 const emptyResponses = () => bridges.reduce((acc, _, index) => ({ ...acc, [index]: { cards: { A: emptyCard(), B: emptyCard(), C: emptyCard(), D: emptyCard() }, saved: false } }), {});
 
 function saveXlsx(rows, filename, sheetName) {
@@ -84,7 +84,7 @@ function DelegateView() {
     const restore = async () => {
       const { data, error } = await supabase
         .from("submission_cards")
-        .select("bridge_index, card_key, celebration, improvement, transformation, connect, narrative")
+        .select("bridge_index, card_key, celebration, improvement, transformation, connect, allocation_reference, narrative")
         .eq("submission_id", submissionId);
       if (error || cancelled || !data?.length) return;
       setResponses((current) => {
@@ -103,6 +103,7 @@ function DelegateView() {
                   transformation: row.transformation || 0,
                   connect: row.connect || 0,
                 },
+                allocationReference: row.allocation_reference || "",
                 narrative: row.narrative || "",
               },
             },
@@ -154,6 +155,15 @@ function DelegateView() {
     }));
   };
 
+  const updateAllocationReference = (cardKey, value) => setResponses((r) => ({
+    ...r,
+    [activeBridge]: {
+      ...r[activeBridge],
+      saved: false,
+      cards: { ...r[activeBridge].cards, [cardKey]: { ...r[activeBridge].cards[cardKey], allocationReference: value } },
+    },
+  }));
+
   const updateNarrative = (cardKey, value) => setResponses((r) => ({
     ...r,
     [activeBridge]: {
@@ -163,23 +173,30 @@ function DelegateView() {
     },
   }));
 
-  const saveAndContinue = async () => {
+  const validateBridge = () => {
     const bridgeResp = responses[activeBridge];
     for (const k of cardKeys) {
       const card = bridgeResp.cards[k];
-      if (Object.values(card.tokens).some(Boolean) && !card.narrative.trim()) {
-        const meta = cardMeta.find((c) => c.key === k);
-        setNotice(`Add a narrative for Card ${k} (${meta.label}) before saving.`);
-        return;
+      const meta = cardMeta.find((c) => c.key === k);
+      if (!card.allocationReference.trim()) {
+        setNotice(`Please complete “What specifically are you allocating your tokens to?” for Card ${k} (${meta.label}).`);
+        return false;
+      }
+      if (!card.narrative.trim()) {
+        setNotice(`Please complete “Why are you allocating your tokens here?” for Card ${k} (${meta.label}).`);
+        return false;
       }
     }
+    return true;
+  };
 
-    try {
-      const fullPayload = {};
-      bridges.forEach((_, bridgeIndex) => {
-        fullPayload[bridgeIndex] = responses[bridgeIndex].cards;
-      });
-      if (!submissionId) {
+  const persistCurrentBridge = async () => {
+    const bridgeResp = responses[activeBridge];
+    const fullPayload = {};
+    bridges.forEach((_, bridgeIndex) => {
+      fullPayload[bridgeIndex] = responses[bridgeIndex].cards;
+    });
+    if (!submissionId) {
         const { data: sub, error: subError } = await supabase
           .from("submissions")
           .insert({ delegate_name: delegateName.trim() || null, payload: fullPayload })
@@ -199,6 +216,7 @@ function DelegateView() {
             improvement: card.tokens.improvement,
             transformation: card.tokens.transformation,
             connect: card.tokens.connect,
+            allocation_reference: card.allocationReference,
             narrative: card.narrative,
           };
         });
@@ -220,6 +238,7 @@ function DelegateView() {
               improvement: card.tokens.improvement,
               transformation: card.tokens.transformation,
               connect: card.tokens.connect,
+              allocation_reference: card.allocationReference,
               narrative: card.narrative,
             }).eq("id", existingRow.id);
             if (upErr) throw upErr;
@@ -232,6 +251,7 @@ function DelegateView() {
               improvement: card.tokens.improvement,
               transformation: card.tokens.transformation,
               connect: card.tokens.connect,
+              allocation_reference: card.allocationReference,
               narrative: card.narrative,
             });
             if (insErr) throw insErr;
@@ -242,23 +262,32 @@ function DelegateView() {
         if (payloadError) throw payloadError;
       }
 
-      setResponses((r) => ({ ...r, [activeBridge]: { ...r[activeBridge], saved: true } }));
-      setNotice("Saved to database.");
-      setTimeout(() => setNotice(""), 2000);
-      setActiveBridge((c) => Math.min(c + 1, bridges.length));
+    setResponses((r) => ({ ...r, [activeBridge]: { ...r[activeBridge], saved: true } }));
+  };
+
+  const saveCurrentBridge = async (advance = false) => {
+    if (!validateBridge()) return;
+    setSubmitState({ status: "idle", message: "" });
+    setNotice("Saving...");
+    try {
+      await persistCurrentBridge();
+      setNotice(advance ? "Saved to database. Moving to the next bridge." : "Saved to database.");
+      setTimeout(() => setNotice(""), 1800);
+      if (advance) setActiveBridge((c) => Math.min(c + 1, bridges.length));
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
+      console.error(err);
       setNotice("Could not save. Please try again.");
     }
   };
 
   const downloadXlsx = () => {
-    const rows = [["Bridge", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "Narrative"]];
+    const rows = [["Bridge", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "What specifically are you allocating your tokens to?", "Why are you allocating your tokens here?"]];
     bridges.forEach((bridge, b) => cardKeys.forEach((k) => {
       const card = responses[b].cards[k];
       const meta = cardMeta.find((c) => c.key === k);
       const total = Object.values(card.tokens).reduce((s, v) => s + v, 0);
-      rows.push([`Bridge ${b + 1}: ${bridge.title}`, `Card ${k}`, meta.label, ...tokenTypes.map((t) => card.tokens[t.id]), total, card.narrative.replaceAll("\n", " ")]);
+      rows.push([`Bridge ${b + 1}: ${bridge.title}`, `Card ${k}`, meta.label, ...tokenTypes.map((t) => card.tokens[t.id]), total, card.allocationReference.replaceAll("\n", " "), card.narrative.replaceAll("\n", " ")]);
     }));
     saveXlsx(rows, "tayside-together-workshop.xlsx", "My Responses");
   };
@@ -287,7 +316,7 @@ function DelegateView() {
     </section>
     <main className="content">
       <nav className="stepper" aria-label="Palliative care journey stages">{bridges.map((bridge, index) => <button key={bridge.title} className={`step ${index === activeBridge ? "active" : ""} ${responses[index].saved ? "complete" : ""}`} onClick={() => setActiveBridge(index)}><span className="step-number">{responses[index].saved ? "✓" : index + 1}</span><span className="step-label">{bridge.title}</span></button>)}<button className={`step review-step ${isReview ? "active" : ""}`} onClick={() => setActiveBridge(bridges.length)}><span className="step-number">↗</span><span className="step-label">Review & submit</span></button></nav>
-      {isReview ? <Review totals={totals} totalSpent={totalSpent} responses={responses} onXlsx={downloadXlsx} onPrint={printReport} delegateName={delegateName} setDelegateName={setDelegateName} submitState={submitState} onSubmit={submitWorkshop} /> : <BridgeView bridge={bridges[activeBridge]} index={activeBridge} response={responses[activeBridge]} onToken={updateToken} onNarrative={updateNarrative} onSave={saveAndContinue} notice={notice} bridgeTokenCount={bridgeTokenCount(activeBridge)} />}
+      {isReview ? <Review totals={totals} totalSpent={totalSpent} responses={responses} onXlsx={downloadXlsx} onPrint={printReport} delegateName={delegateName} setDelegateName={setDelegateName} submitState={submitState} onSubmit={submitWorkshop} /> : <BridgeView bridge={bridges[activeBridge]} index={activeBridge} response={responses[activeBridge]} onToken={updateToken} onAllocationReference={updateAllocationReference} onNarrative={updateNarrative} onSave={() => saveCurrentBridge(true)} onSaveOnly={() => saveCurrentBridge(false)} onBack={() => { setActiveBridge((c) => Math.max(c - 1, 0)); setNotice(""); window.scrollTo({ top: 0, behavior: "smooth" }); }} notice={notice} bridgeTokenCount={bridgeTokenCount(activeBridge)} />}
     </main>
   </>;
 }
@@ -306,7 +335,7 @@ function MiniToken({ type, count, onAdd, onRemove }) {
   );
 }
 
-function CardAllocation({ cardKey, card, onToken, onNarrative }) {
+function CardAllocation({ cardKey, card, onToken, onAllocationReference, onNarrative }) {
   const hasTokens = Object.values(card.tokens).some(Boolean);
   const meta = cardMeta.find((c) => c.key === cardKey);
   return (
@@ -315,12 +344,17 @@ function CardAllocation({ cardKey, card, onToken, onNarrative }) {
       <div className="mini-alloc-row">
         {tokenTypes.map((type) => <MiniToken key={type.id} type={type} count={card.tokens[type.id]} onAdd={() => onToken(cardKey, type.id, 1)} onRemove={() => onToken(cardKey, type.id, -1)} />)}
       </div>
-      <textarea className="card-narrative" value={card.narrative} onChange={(e) => onNarrative(cardKey, e.target.value)} placeholder={hasTokens ? `Why invest here? (required to save) ${meta.label.toLowerCase()}` : `Optional note for this card · ${meta.label.toLowerCase()}`} />
+      <label className="card-text-label">What specifically are you allocating your tokens to? <span>Required</span>
+        <textarea className="card-narrative" value={card.allocationReference} onChange={(e) => onAllocationReference(cardKey, e.target.value)} placeholder={`Be specific about the part of this card you are referring to · ${meta.label.toLowerCase()}`} required />
+      </label>
+      <label className="card-text-label">Why are you allocating your tokens here? <span>Required</span>
+        <textarea className="card-narrative" value={card.narrative} onChange={(e) => onNarrative(cardKey, e.target.value)} placeholder="Explain your thoughts, experience or reason for the allocation" required />
+      </label>
     </div>
   );
 }
 
-function BridgeView({ bridge, index, response, onToken, onNarrative, onSave, notice, bridgeTokenCount }) {
+function BridgeView({ bridge, index, response, onToken, onAllocationReference, onNarrative, onSave, onBack, onSaveOnly, notice, bridgeTokenCount }) {
   return <>
     <section className="hero"><div className="hero-kicker">THE PALLIATIVE CARE JOURNEY <span>·</span> STAGE {String(index + 1).padStart(2, "0")}</div><h1>Bridge {index + 1} <span>—</span> {bridge.title}</h1><p>{bridge.intro}</p></section>
     <section className="bridge-grid">
@@ -328,28 +362,32 @@ function BridgeView({ bridge, index, response, onToken, onNarrative, onSave, not
         <div className="card-label"><span className="label-icon">01</span><div><small>CARD A</small><h2>What is happening?</h2></div></div>
         <p>{bridge.intro}</p><h3>People may experience</h3><ul>{bridge.context.map((item) => <li key={item}>{item}</li>)}</ul>
         <div className="context-note">A moment that can change the shape of everyday life.</div>
-        <CardAllocation cardKey="A" card={response.cards.A} onToken={onToken} onNarrative={onNarrative} />
+        <CardAllocation cardKey="A" card={response.cards.A} onToken={onToken} onAllocationReference={onAllocationReference} onNarrative={onNarrative} />
       </article>
       <article className="card matters">
         <div className="card-label"><span className="label-icon">02</span><div><small>CARD B</small><h2>What matters most?</h2></div></div>
         <div className="quote-mark">"</div><blockquote>{bridge.quote}</blockquote><div className="matter-list">{bridge.matters.map((item) => <span key={item}>{item}</span>)}</div>
-        <CardAllocation cardKey="B" card={response.cards.B} onToken={onToken} onNarrative={onNarrative} />
+        <CardAllocation cardKey="B" card={response.cards.B} onToken={onToken} onAllocationReference={onAllocationReference} onNarrative={onNarrative} />
       </article>
       <article className="card services">
         <div className="card-label"><span className="label-icon">03</span><div><small>CARD C</small><h2>How services help</h2></div></div>
         <div className="service-list">{bridge.services.map((service) => <div className="service-row" key={service.name}><strong>{service.name}</strong><ul>{service.items.map((item) => <li key={item}>{item}</li>)}</ul></div>)}</div>
-        <CardAllocation cardKey="C" card={response.cards.C} onToken={onToken} onNarrative={onNarrative} />
+        <CardAllocation cardKey="C" card={response.cards.C} onToken={onToken} onAllocationReference={onAllocationReference} onNarrative={onNarrative} />
       </article>
       <article className="card guardrails">
         <div className="card-label"><span className="label-icon">04</span><div><small>CARD D</small><h2>Connect better & guardrails</h2></div></div>
         <div className="transition"><span>CONNECT BETTER</span><strong>{bridge.transition}</strong></div><h3>What to avoid</h3><div className="guardrail-list">{bridge.guardrails.map((item) => <span key={item}>{item}</span>)}</div>
-        <CardAllocation cardKey="D" card={response.cards.D} onToken={onToken} onNarrative={onNarrative} />
+        <CardAllocation cardKey="D" card={response.cards.D} onToken={onToken} onAllocationReference={onAllocationReference} onNarrative={onNarrative} />
       </article>
     </section>
     {notice && <div className="notice" role="alert">{notice}</div>}
     <div className="action-row">
       <span>{bridgeTokenCount} tokens on this bridge · {response.saved ? "Saved — revisit any time." : "Unsaved changes"}</span>
-      <button className="primary-button" onClick={onSave}>{index === bridges.length - 1 ? "Save & review" : "Save & continue"}<span>→</span></button>
+      <div className="progress-actions">
+        <button className="secondary-button" onClick={onBack} disabled={index === 0}>← Back</button>
+        <button className="secondary-button" onClick={onSaveOnly}>Save <span>✓</span></button>
+        <button className="primary-button" onClick={onSave}>{index === bridges.length - 1 ? "Save & review" : "Save & continue"}<span>→</span></button>
+      </div>
     </div>
   </>;
 }
@@ -361,13 +399,13 @@ function Review({ totals, totalSpent, responses, onXlsx, onPrint, delegateName, 
     <div className="review-summary"><div><span className="eyebrow">TOTAL ALLOCATED</span><strong>{totalSpent}<small> / 20 tokens</small></strong><p>{20 - totalSpent} tokens remain unallocated.</p></div><div className="summary-bars">{tokenTypes.map((type) => <div className="summary-bar" key={type.id}><div><span className={`token-dot ${type.color}`} /><strong>{type.label}</strong><b>{totals[type.id]} / {type.limit}</b></div><div className="meter"><span className={type.color} style={{ width: `${(totals[type.id] / type.limit) * 100}%` }} /></div></div>)}</div></div>
     <div className="review-table-wrap"><div className="section-heading"><div><span className="eyebrow">FULL JOURNEY</span><h2>Bridge-by-bridge, card-by-card</h2></div><span className="review-count">{narratives} narratives captured</span></div>
       <div className="review-table">
-        <div className="table-row table-head"><span>Bridge & card</span>{tokenTypes.map((type) => <span key={type.id}>{type.short}</span>)}<span>Total</span><span>Narrative</span></div>
+        <div className="table-row table-head"><span>Bridge & card</span>{tokenTypes.map((type) => <span key={type.id}>{type.short}</span>)}<span>Total</span><span>Response details</span></div>
         {bridges.map((bridge, b) => {
           const filled = cardKeys.map((k) => ({ k, card: responses[b].cards[k], meta: cardMeta.find((c) => c.key === k) })).filter(({ card }) => Object.values(card.tokens).some(Boolean) || card.narrative.trim());
           if (filled.length === 0) return <div className="table-row empty-row" key={b}><span className="bridge-cell"><b>{b + 1}</b>{bridge.title}</span><span className="narrative-cell muted">No tokens allocated on this bridge</span></div>;
           return filled.map(({ k, card, meta }) => {
             const total = Object.values(card.tokens).reduce((s, v) => s + v, 0);
-            return <div className="table-row" key={`${b}-${k}`}><span className="bridge-cell"><b>{b + 1}</b>{bridge.title}<em className="card-tag">Card {k} · {meta.label}</em></span>{tokenTypes.map((type) => <span className={type.color} key={type.id}>{card.tokens[type.id]}</span>)}<span className="total-cell">{total}</span><span className="narrative-cell">{card.narrative || "—"}</span></div>;
+            return <div className="table-row" key={`${b}-${k}`}><span className="bridge-cell"><b>{b + 1}</b>{bridge.title}<em className="card-tag">Card {k} · {meta.label}</em></span>{tokenTypes.map((type) => <span className={type.color} key={type.id}>{card.tokens[type.id]}</span>)}<span className="total-cell">{total}</span><span className="narrative-cell">{card.allocationReference ? `Allocated to: ${card.allocationReference} · Why: ${card.narrative || "—"}` : (card.narrative || "—")}</span></div>;
           });
         })}
       </div>
@@ -399,7 +437,7 @@ function FacilitatorView() {
       try {
         const { data: subs, error: subError } = await supabase.from("submissions").select("id, delegate_name, submitted_at").order("submitted_at", { ascending: false });
         if (subError) throw subError;
-        const { data: cardRows, error: cardError } = await supabase.from("submission_cards").select("id, submission_id, bridge_index, card_key, celebration, improvement, transformation, connect, narrative");
+        const { data: cardRows, error: cardError } = await supabase.from("submission_cards").select("id, submission_id, bridge_index, card_key, celebration, improvement, transformation, connect, allocation_reference, narrative");
         if (cardError) throw cardError;
         if (cancelled) return;
         setSubmissions(subs || []);
@@ -464,7 +502,7 @@ function FacilitatorView() {
       byBridgeCard[key].improvement += c.improvement;
       byBridgeCard[key].transformation += c.transformation;
       byBridgeCard[key].connect += c.connect;
-      if (c.narrative && c.narrative.trim()) byBridgeCard[key].narratives.push({ narrative: c.narrative, delegate: submissions.find((s) => s.id === c.submission_id)?.delegate_name });
+      if ((c.allocation_reference && c.allocation_reference.trim()) || (c.narrative && c.narrative.trim())) byBridgeCard[key].narratives.push({ allocationReference: c.allocation_reference || "", narrative: c.narrative || "", delegate: submissions.find((s) => s.id === c.submission_id)?.delegate_name });
     });
     return { byType, byBridgeCard };
   }, [cards, submissions]);
@@ -472,19 +510,20 @@ function FacilitatorView() {
   const totalTokens = Object.values(aggregate.byType).reduce((s, v) => s + v, 0);
 
   const downloadAggregateXlsx = () => {
-    const rows = [["Bridge", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "Narratives"]];
+    const rows = [["Bridge", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "What specifically are you allocating your tokens to?", "Why are you allocating your tokens here?"]];
     bridges.forEach((bridge, b) => cardKeys.forEach((k) => {
       const meta = cardMeta.find((c) => c.key === k);
       const agg = aggregate.byBridgeCard[`${b}-${k}`] || { celebration: 0, improvement: 0, transformation: 0, connect: 0, narratives: [] };
       const total = agg.celebration + agg.improvement + agg.transformation + agg.connect;
+      const refText = agg.narratives.map((n) => `${n.delegate || "Anonymous"}: ${n.allocationReference}`).join(" | ").replaceAll("\n", " ");
       const narText = agg.narratives.map((n) => `${n.delegate || "Anonymous"}: ${n.narrative}`).join(" | ").replaceAll("\n", " ");
-      rows.push([`Bridge ${b + 1}: ${bridge.title}`, `Card ${k}`, meta.label, agg.celebration, agg.improvement, agg.transformation, agg.connect, total, narText]);
+      rows.push([`Bridge ${b + 1}: ${bridge.title}`, `Card ${k}`, meta.label, agg.celebration, agg.improvement, agg.transformation, agg.connect, total, refText, narText]);
     }));
     saveXlsx(rows, "tayside-together-aggregate.xlsx", "Aggregate Results");
   };
 
   const downloadIndividualXlsx = () => {
-    const rows = [["Delegate", "Bridge", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "Narrative"]];
+    const rows = [["Delegate", "Bridge", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "What specifically are you allocating your tokens to?", "Why are you allocating your tokens here?"]];
     cards.forEach((c) => {
       const sub = submissions.find((s) => s.id === c.submission_id);
       const meta = cardMeta.find((m) => m.key === c.card_key);
@@ -496,6 +535,7 @@ function FacilitatorView() {
         `Card ${c.card_key}`,
         meta?.label || "",
         c.celebration, c.improvement, c.transformation, c.connect, total,
+        (c.allocation_reference || "").replaceAll("\n", " "),
         (c.narrative || "").replaceAll("\n", " "),
       ]);
     });
@@ -537,7 +577,7 @@ function FacilitatorView() {
           if (!agg || agg.narratives.length === 0) return null;
           return <div className="narrative-block" key={`${b}-${k}`}>
             <div className="narrative-block-head"><span className="bridge-tag">Bridge {b + 1} · Card {k}</span><strong>{bridge.title}</strong><small>{meta.label}</small></div>
-            {agg.narratives.map((n, i) => <div className="narrative-item" key={i}><span className="delegate-name">{n.delegate || "Anonymous"}</span><p>{n.narrative}</p></div>)}
+            {agg.narratives.map((n, i) => <div className="narrative-item" key={i}><span className="delegate-name">{n.delegate || "Anonymous"}</span><p><strong>Allocated to:</strong> {n.allocationReference || "—"}</p><p><strong>Why:</strong> {n.narrative || "—"}</p></div>)}
           </div>;
         }))}
       </div>
