@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase } from "./supabaseClient";
+import { localDb } from "./supabaseClient";
 
 const tokenTypes = [
   { id: "celebration", label: "Celebration", short: "Green", limit: 5, color: "green", description: "Protect what is working and build on strengths." },
@@ -96,44 +96,36 @@ function DelegateView() {
 
   useEffect(() => {
     if (!submissionId) return;
-    let cancelled = false;
-    const restore = async () => {
-      const { data, error } = await supabase
-        .from("submission_cards")
-        .select("bridge_index, card_key, celebration, improvement, transformation, connect, allocation_reference, narrative")
-        .eq("submission_id", submissionId);
-      if (error || cancelled || !data?.length) return;
-      setResponses((current) => {
-        const next = { ...current };
-        data.forEach((row) => {
-          if (row.bridge_index === -1 && row.card_key === "B") {
-            setFoundationResponse(row.narrative || "");
-            return;
-          }
-          if (!next[row.bridge_index]?.cards?.[row.card_key]) return;
-          next[row.bridge_index] = {
-            ...next[row.bridge_index],
-            saved: true,
-            cards: {
-              ...next[row.bridge_index].cards,
-              [row.card_key]: {
-                tokens: {
-                  celebration: row.celebration || 0,
-                  improvement: row.improvement || 0,
-                  transformation: row.transformation || 0,
-                  connect: row.connect || 0,
-                },
-                allocationReference: row.allocation_reference || "",
-                narrative: row.narrative || "",
+    const data = localDb.getCardsBySubmission(submissionId);
+    if (!data?.length) return;
+    setResponses((current) => {
+      const next = { ...current };
+      data.forEach((row) => {
+        if (row.bridge_index === -1 && row.card_key === "B") {
+          setFoundationResponse(row.narrative || "");
+          return;
+        }
+        if (!next[row.bridge_index]?.cards?.[row.card_key]) return;
+        next[row.bridge_index] = {
+          ...next[row.bridge_index],
+          saved: true,
+          cards: {
+            ...next[row.bridge_index].cards,
+            [row.card_key]: {
+              tokens: {
+                celebration: row.celebration || 0,
+                improvement: row.improvement || 0,
+                transformation: row.transformation || 0,
+                connect: row.connect || 0,
               },
+              allocationReference: row.allocation_reference || "",
+              narrative: row.narrative || "",
             },
-          };
-        });
-        return next;
+          },
+        };
       });
-    };
-    restore();
-    return () => { cancelled = true; };
+      return next;
+    });
   }, [submissionId]);
 
   useEffect(() => {
@@ -215,105 +207,64 @@ function DelegateView() {
     if (isFoundation) {
       let id = submissionId;
       if (!id) {
-        const { data: sub, error: subError } = await supabase
-          .from("submissions")
-          .insert({ delegate_name: delegateName.trim() || null, payload: {} })
-          .select("id")
-          .single();
-        if (subError) throw subError;
+        const sub = localDb.createSubmission(delegateName.trim() || null, {});
         id = sub.id;
         setSubmissionId(id);
         try { localStorage.setItem("tayside-workshop-submission-id", id); } catch {}
       }
-      const { data: existing } = await supabase
-        .from("submission_cards")
-        .select("id")
-        .eq("submission_id", id)
-        .eq("bridge_index", -1)
-        .eq("card_key", "B")
-        .maybeSingle();
-      const values = { submission_id: id, bridge_index: -1, card_key: "B", celebration: 0, improvement: 0, transformation: 0, connect: 0, allocation_reference: "", narrative: foundationResponse };
-      if (existing?.id) {
-        const { error } = await supabase.from("submission_cards").update({ narrative: foundationResponse }).eq("id", existing.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("submission_cards").insert(values);
-        if (error) throw error;
-      }
-      await supabase.from("submissions").update({ delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() }).eq("id", id);
+      localDb.upsertCard({
+        submission_id: id,
+        bridge_index: -1,
+        card_key: "B",
+        celebration: 0,
+        improvement: 0,
+        transformation: 0,
+        connect: 0,
+        allocation_reference: "",
+        narrative: foundationResponse,
+      });
+      localDb.updateSubmission(id, { delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() });
       return;
     }
-    const bridgeResp = responses[activeBridge];
     const fullPayload = {};
     bridges.forEach((_, bridgeIndex) => {
       fullPayload[bridgeIndex] = responses[bridgeIndex].cards;
     });
     if (!submissionId) {
-        const { data: sub, error: subError } = await supabase
-          .from("submissions")
-          .insert({ delegate_name: delegateName.trim() || null, payload: fullPayload })
-          .select("id")
-          .single();
-        if (subError) throw subError;
-        setSubmissionId(sub.id);
-        try { localStorage.setItem("tayside-workshop-submission-id", sub.id); } catch {}
-
-        const cardRows = cardKeys.map((k) => {
-          const card = responses[activeBridge].cards[k];
-          return {
-            submission_id: sub.id,
-            bridge_index: activeBridge,
-            card_key: k,
-            celebration: card.tokens.celebration,
-            improvement: card.tokens.improvement,
-            transformation: card.tokens.transformation,
-            connect: card.tokens.connect,
-            allocation_reference: card.allocationReference,
-            narrative: card.narrative,
-          };
+      const sub = localDb.createSubmission(delegateName.trim() || null, fullPayload);
+      setSubmissionId(sub.id);
+      try { localStorage.setItem("tayside-workshop-submission-id", sub.id); } catch {}
+      cardKeys.forEach((k) => {
+        const card = responses[activeBridge].cards[k];
+        localDb.insertCard({
+          submission_id: sub.id,
+          bridge_index: activeBridge,
+          card_key: k,
+          celebration: card.tokens.celebration,
+          improvement: card.tokens.improvement,
+          transformation: card.tokens.transformation,
+          connect: card.tokens.connect,
+          allocation_reference: card.allocationReference,
+          narrative: card.narrative,
         });
-        const { error: cardsError } = await supabase.from("submission_cards").insert(cardRows);
-        if (cardsError) throw cardsError;
-      } else {
-        const { data: existing } = await supabase
-          .from("submission_cards")
-          .select("id, card_key")
-          .eq("submission_id", submissionId)
-          .eq("bridge_index", activeBridge);
-
-        for (const k of cardKeys) {
-          const card = responses[activeBridge].cards[k];
-          const existingRow = existing?.find((r) => r.card_key === k);
-          if (existingRow) {
-            const { error: upErr } = await supabase.from("submission_cards").update({
-              celebration: card.tokens.celebration,
-              improvement: card.tokens.improvement,
-              transformation: card.tokens.transformation,
-              connect: card.tokens.connect,
-              allocation_reference: card.allocationReference,
-              narrative: card.narrative,
-            }).eq("id", existingRow.id);
-            if (upErr) throw upErr;
-          } else {
-            const { error: insErr } = await supabase.from("submission_cards").insert({
-              submission_id: submissionId,
-              bridge_index: activeBridge,
-              card_key: k,
-              celebration: card.tokens.celebration,
-              improvement: card.tokens.improvement,
-              transformation: card.tokens.transformation,
-              connect: card.tokens.connect,
-              allocation_reference: card.allocationReference,
-              narrative: card.narrative,
-            });
-            if (insErr) throw insErr;
-          }
-        }
-
-        const { error: payloadError } = await supabase.from("submissions").update({ payload: fullPayload, delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() }).eq("id", submissionId);
-        if (payloadError) throw payloadError;
-      }
-
+      });
+    } else {
+      cardKeys.forEach((k) => {
+        const card = responses[activeBridge].cards[k];
+        localDb.upsertCard({
+          submission_id: submissionId,
+          bridge_index: activeBridge,
+          card_key: k,
+          celebration: card.tokens.celebration,
+          improvement: card.tokens.improvement,
+          transformation: card.tokens.transformation,
+          connect: card.tokens.connect,
+          allocation_reference: card.allocationReference,
+          narrative: card.narrative,
+        });
+      });
+      localDb.updateSubmission(submissionId, { payload: fullPayload, delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() });
+    }
     setResponses((r) => ({ ...r, [activeBridge]: { ...r[activeBridge], saved: true } }));
   };
 
@@ -323,7 +274,7 @@ function DelegateView() {
     setNotice("Saving...");
     try {
       await persistCurrentBridge();
-      setNotice(advance ? "Saved to database. Moving to the next bridge." : "Saved to database.");
+      setNotice(advance ? "Saved. Moving to the next stage." : "Saved.");
       setTimeout(() => setNotice(""), 1800);
       if (advance) setActiveBridge((c) => Math.min(c + 1, bridges.length));
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -354,7 +305,7 @@ function DelegateView() {
     setSubmitState({ status: "submitting", message: "" });
     try {
       if (delegateName.trim() && submissionId) {
-        await supabase.from("submissions").update({ delegate_name: delegateName.trim() }).eq("id", submissionId);
+        localDb.updateSubmission(submissionId, { delegate_name: delegateName.trim() });
       }
       setSubmitState({ status: "success", message: "Your responses have been submitted. Thank you!" });
     } catch (err) {
@@ -484,7 +435,6 @@ function Review({ totals, totalSpent, responses, foundationResponse, onXlsx, onP
     <div className="review-table-wrap"><div className="section-heading"><div><span className="eyebrow">FULL JOURNEY</span><h2>Bridge-by-bridge, card-by-card</h2></div><span className="review-count">{narratives} narratives captured</span></div>
       <div className="review-table">
         <div className="table-row table-head"><span>Bridge & card</span>{tokenTypes.map((type) => <span key={type.id}>{type.short}</span>)}<span>Total</span><span>Response details</span></div>
-        {aggregate.foundationNarratives.length > 0 && <div className="table-row foundation-facilitator-row"><span className="bridge-cell"><b>F</b>Foundation<em className="card-tag">Card B · Public health palliative care</em></span><span className="narrative-cell">{aggregate.foundationNarratives.length} {aggregate.foundationNarratives.length === 1 ? "reflection" : "reflections"}</span></div>}
         {bridges.map((bridge, b) => {
           const filled = cardKeys.map((k) => ({ k, card: responses[b].cards[k], meta: cardMeta.find((c) => c.key === k) })).filter(({ card }) => Object.values(card.tokens).some(Boolean) || card.narrative.trim());
           if (filled.length === 0) return <div className="table-row empty-row" key={b}><span className="bridge-cell"><b>{b + 1}</b>{bridge.title}</span><span className="narrative-cell muted">No tokens allocated on this bridge</span></div>;
@@ -497,7 +447,7 @@ function Review({ totals, totalSpent, responses, foundationResponse, onXlsx, onP
     </div>
     <div className="submit-card">
       <div className="section-heading"><div><span className="eyebrow">SUBMIT TO FACILITATOR</span><h2>Send your responses</h2></div></div>
-      <p className="submit-desc">Your token allocations and narratives have been saved to the database as you progressed. Submit to confirm your responses.</p>
+      <p className="submit-desc">Your token allocations and narratives have been saved in your browser as you progressed. Submit to confirm your responses.</p>
       <label className="name-label">Your name (optional)<input type="text" value={delegateName} onChange={(e) => setDelegateName(e.target.value)} placeholder="e.g. Dr Jane Smith" /></label>
       {submitState.status === "error" && <div className="notice" role="alert">{submitState.message}</div>}
       {submitState.status === "success" && <div className="success-notice" role="status">{submitState.message}</div>}
@@ -513,63 +463,30 @@ function FacilitatorView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [livePulse, setLivePulse] = useState(false);
-  const channelRef = useRef(null);
-
   useEffect(() => {
-    let cancelled = false;
-
-    const loadData = async () => {
+    const loadData = () => {
       try {
-        const { data: subs, error: subError } = await supabase.from("submissions").select("id, delegate_name, submitted_at").order("submitted_at", { ascending: false });
-        if (subError) throw subError;
-        const { data: cardRows, error: cardError } = await supabase.from("submission_cards").select("id, submission_id, bridge_index, card_key, celebration, improvement, transformation, connect, allocation_reference, narrative");
-        if (cardError) throw cardError;
-        if (cancelled) return;
-        setSubmissions(subs || []);
-        setCards(cardRows || []);
+        const subs = localDb.getAllSubmissions();
+        const cardRows = localDb.getAllCards();
+        setSubmissions(subs);
+        setCards(cardRows);
       } catch (err) {
-        if (!cancelled) setError("Could not load results. Please try again.");
+        setError("Could not load results. Please try again.");
       } finally {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
       }
     };
 
     loadData();
 
-    const channel = supabase
-      .channel("submission_live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "submission_cards" }, (payload) => {
-        setLivePulse(true);
-        setTimeout(() => setLivePulse(false), 1500);
-        if (payload.eventType === "INSERT" && payload.new) {
-          setCards((prev) => prev.some((c) => c.id === payload.new.id) ? prev : [...prev, payload.new]);
-        } else if (payload.eventType === "UPDATE" && payload.new) {
-          setCards((prev) => prev.map((c) => (c.id === payload.new.id ? payload.new : c)));
-        } else if (payload.eventType === "DELETE" && payload.old) {
-          setCards((prev) => prev.filter((c) => c.id !== payload.old.id));
-        }
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "submissions" }, (payload) => {
-        setLivePulse(true);
-        setTimeout(() => setLivePulse(false), 1500);
-        if (payload.eventType === "INSERT" && payload.new) {
-          setSubmissions((prev) => prev.some((s) => s.id === payload.new.id) ? prev : [payload.new, ...prev]);
-        } else if (payload.eventType === "UPDATE" && payload.new) {
-          setSubmissions((prev) => prev.map((s) => (s.id === payload.new.id ? payload.new : s)));
-        } else if (payload.eventType === "DELETE" && payload.old) {
-          setSubmissions((prev) => prev.filter((s) => s.id !== payload.old.id));
-        }
-      })
-      .subscribe();
-
-    channelRef.current = channel;
+    const unsubscribe = localDb.subscribe(() => {
+      setLivePulse(true);
+      setTimeout(() => setLivePulse(false), 1500);
+      loadData();
+    });
 
     return () => {
-      cancelled = true;
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
-        channelRef.current = null;
-      }
+      unsubscribe();
     };
   }, []);
 
@@ -651,6 +568,7 @@ function FacilitatorView() {
     <div className="review-table-wrap"><div className="section-heading"><div><span className="eyebrow">FULL JOURNEY</span><h2>Combined bridge-by-bridge results</h2></div><div className="export-actions"><button className="secondary-button" onClick={downloadIndividualXlsx}>Individual Excel <span>↓</span></button><button className="secondary-button" onClick={downloadAggregateXlsx}>Aggregate Excel <span>↓</span></button></div></div>
       <div className="review-table">
         <div className="table-row table-head"><span>Bridge & card</span>{tokenTypes.map((type) => <span key={type.id}>{type.short}</span>)}<span>Total</span><span>Narratives</span></div>
+        {aggregate.foundationNarratives.length > 0 && <div className="table-row foundation-facilitator-row"><span className="bridge-cell"><b>F</b>Foundation<em className="card-tag">Card B · Public health palliative care</em></span>{tokenTypes.map((type) => <span key={type.id}>0</span>)}<span className="total-cell">0</span><span className="narrative-cell">{aggregate.foundationNarratives.length} {aggregate.foundationNarratives.length === 1 ? "reflection" : "reflections"}</span></div>}
         {bridges.map((bridge, b) => {
           const hasAny = cardKeys.some((k) => aggregate.byBridgeCard[`${b}-${k}`] && Object.values(aggregate.byBridgeCard[`${b}-${k}`]).some((v) => typeof v === "number" && v > 0));
           if (!hasAny) return <div className="table-row empty-row" key={b}><span className="bridge-cell"><b>{b + 1}</b>{bridge.title}</span><span className="narrative-cell muted">No tokens allocated</span></div>;
