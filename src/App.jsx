@@ -30,6 +30,28 @@ const foundationExamples = [
   "Public conversation about death, dying and bereavement",
 ];
 
+const foundationQuestions = [
+  "What does a strong public health palliative care approach look like in Tayside?",
+  "What helps people before, alongside and beyond formal services?",
+  "What strengths already exist in our communities that we should build upon?",
+  "Where do we need to increase confidence, connection and compassion to better support people through serious illness, dying and bereavement?",
+];
+
+const emptyFoundationResponses = () => foundationQuestions.map(() => "");
+const foundationHasContent = (fr) => fr.some((t) => t.trim());
+const foundationToNarrative = (fr) => JSON.stringify(fr);
+const narrativeToFoundation = (narrative) => {
+  if (!narrative) return emptyFoundationResponses();
+  try {
+    const parsed = JSON.parse(narrative);
+    if (Array.isArray(parsed) && parsed.length === foundationQuestions.length) return parsed;
+    return [narrative, "", "", ""];
+  } catch {
+    return [narrative, "", "", ""];
+  }
+};
+const foundationDisplay = (fr) => fr.map((t, i) => foundationQuestions[i] + ": " + (t.trim() || "—")).join("\n\n");
+
 const bridges = [
   { title: "Significant Diagnosis / Life-Changing News", intro: "A person receives information that may fundamentally change how they see their future.", context: ["Cancer diagnosis", "Progressive neurological disease", "Advanced organ failure", "Serious frailty or dementia", "Recurrence of illness"], matters: ["What does this mean?", "Can this be treated?", "Who will support me?", "How do I tell my family?"], quote: "Everything changed that day.", transition: "Living well → Significant diagnosis / life-changing news", guardrails: ["Diagnosis without support", "Information overload", "Unclear next steps", "Family not supported"], services: [{ name: "General Practice", items: ["Trusted follow-up", "Continuity beyond diagnosis"] }, { name: "Specialist Palliative Care", items: ["Explain progression", "Introduce support pathways"] }, { name: "Community Nursing", items: ["Reassurance and navigation", "Support at home"] }, { name: "Third Sector", items: ["Practical support", "Family resources"] }] },
   { title: "Understanding & Adapting", intro: "People are beginning to understand the implications of their diagnosis or changing health.", context: ["Progression of heart failure", "Advanced COPD", "Neurological disease diagnosis", "Recurrent hospital admissions", "Increasing frailty"], matters: ["I don't know what happens next.", "There is too much to process.", "I am terrified of tomorrow.", "I can't find the right help."], quote: "This isn't just happening to me — our family's journey is starting here too.", transition: "Significant diagnosis / life-changing news → Understanding & adapting", guardrails: ["Isolation", "Poor access to information", "Emotional distress unrecognised", "Support starts too late"], services: [{ name: "Hospital & Consultant Teams", items: ["Explain risks and options", "Signpost further support"] }, { name: "General Practice", items: ["Holistic review", "Support family members"] }, { name: "Community Nursing", items: ["Home-based assessment", "Monitor changing needs"] }, { name: "Allied Health Professionals", items: ["Functional assessment", "Communication and energy support"] }] },
@@ -75,9 +97,9 @@ function App() {
 }
 
 function DelegateView() {
-  const [activeBridge, setActiveBridge] = useState(0);
+  const [activeBridge, setActiveBridge] = useState(-1);
   const [responses, setResponses] = useState(emptyResponses);
-  const [foundationResponse, setFoundationResponse] = useState("");
+  const [foundationResponses, setFoundationResponses] = useState(emptyFoundationResponses);
   const [notice, setNotice] = useState("");
   const [delegateName, setDelegateName] = useState("");
   const [submitState, setSubmitState] = useState({ status: "idle", message: "" });
@@ -102,7 +124,7 @@ function DelegateView() {
       const next = { ...current };
       data.forEach((row) => {
         if (row.bridge_index === -1 && row.card_key === "B") {
-          setFoundationResponse(row.narrative || "");
+          setFoundationResponses(narrativeToFoundation(row.narrative));
           return;
         }
         if (!next[row.bridge_index]?.cards?.[row.card_key]) return;
@@ -221,7 +243,7 @@ function DelegateView() {
         transformation: 0,
         connect: 0,
         allocation_reference: "",
-        narrative: foundationResponse,
+        narrative: foundationToNarrative(foundationResponses),
       });
       localDb.updateSubmission(id, { delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() });
       return;
@@ -286,7 +308,7 @@ function DelegateView() {
 
   const downloadXlsx = () => {
     const rows = [["Stage", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "What specifically are you allocating your tokens to?", "Why are you allocating your tokens here?"]];
-    rows.push(["Foundation", "Card B", "Public health palliative care approach", 0, 0, 0, 0, 0, "", foundationResponse.replaceAll("\n", " ")]);
+    rows.push(["Foundation", "Card B", "Public health palliative care approach", 0, 0, 0, 0, 0, "", foundationDisplay(foundationResponses).replaceAll("\n", " ")]);
     bridges.forEach((bridge, b) => cardKeys.forEach((k) => {
       const card = responses[b].cards[k];
       const meta = cardMeta.find((c) => c.key === k);
@@ -320,11 +342,11 @@ function DelegateView() {
     </section>
     <main className="content">
       <nav className="stepper" aria-label="Palliative care journey stages">
-        <button className={`step foundation-step ${isFoundation ? "active" : ""} ${foundationResponse.trim() ? "complete" : ""}`} onClick={() => setActiveBridge(-1)}><span className="step-number">{foundationResponse.trim() ? "✓" : "F"}</span><span className="step-label">Foundation</span></button>
+        <button className={`step foundation-step ${isFoundation ? "active" : ""} ${foundationHasContent(foundationResponses) ? "complete" : ""}`} onClick={() => setActiveBridge(-1)}><span className="step-number">{foundationHasContent(foundationResponses) ? "✓" : "F"}</span><span className="step-label">Foundation</span></button>
         {bridges.map((bridge, index) => <button key={bridge.title} className={`step ${index === activeBridge ? "active" : ""} ${responses[index].saved ? "complete" : ""}`} onClick={() => setActiveBridge(index)}><span className="step-number">{responses[index].saved ? "✓" : index + 1}</span><span className="step-label">{bridge.title}</span></button>)}
         <button className={`step review-step ${isReview ? "active" : ""}`} onClick={() => setActiveBridge(bridges.length)}><span className="step-number">↗</span><span className="step-label">Review & submit</span></button>
       </nav>
-      {isReview ? <Review totals={totals} totalSpent={totalSpent} responses={responses} foundationResponse={foundationResponse} onXlsx={downloadXlsx} onPrint={printReport} delegateName={delegateName} setDelegateName={setDelegateName} submitState={submitState} onSubmit={submitWorkshop} /> : isFoundation ? <FoundationView response={foundationResponse} onChange={setFoundationResponse} onSave={() => saveCurrentBridge(true)} onSaveOnly={() => saveCurrentBridge(false)} onBack={() => setActiveBridge(0)} notice={notice} saved={Boolean(foundationResponse.trim())} /> : <BridgeView bridge={bridges[activeBridge]} index={activeBridge} response={responses[activeBridge]} onToken={updateToken} onAllocationReference={updateAllocationReference} onNarrative={updateNarrative} onSave={() => saveCurrentBridge(true)} onSaveOnly={() => saveCurrentBridge(false)} onBack={() => { setActiveBridge((c) => Math.max(c - 1, 0)); setNotice(""); window.scrollTo({ top: 0, behavior: "smooth" }); }} notice={notice} bridgeTokenCount={bridgeTokenCount(activeBridge)} />}
+      {isReview ? <Review totals={totals} totalSpent={totalSpent} responses={responses} foundationResponses={foundationResponses} onXlsx={downloadXlsx} onPrint={printReport} delegateName={delegateName} setDelegateName={setDelegateName} submitState={submitState} onSubmit={submitWorkshop} /> : isFoundation ? <FoundationView responses={foundationResponses} onChange={setFoundationResponses} onSave={() => saveCurrentBridge(true)} onSaveOnly={() => saveCurrentBridge(false)} onBack={() => setActiveBridge(0)} notice={notice} saved={foundationHasContent(foundationResponses)} /> : <BridgeView bridge={bridges[activeBridge]} index={activeBridge} response={responses[activeBridge]} onToken={updateToken} onAllocationReference={updateAllocationReference} onNarrative={updateNarrative} onSave={() => saveCurrentBridge(true)} onSaveOnly={() => saveCurrentBridge(false)} onBack={() => { setActiveBridge((c) => Math.max(c - 1, 0)); setNotice(""); window.scrollTo({ top: 0, behavior: "smooth" }); }} notice={notice} bridgeTokenCount={bridgeTokenCount(activeBridge)} />}
     </main>
   </>;
 }
@@ -362,7 +384,12 @@ function CardAllocation({ cardKey, card, onToken, onAllocationReference, onNarra
   );
 }
 
-function FoundationView({ response, onChange, onSave, onSaveOnly, onBack, notice, saved }) {
+function FoundationView({ responses, onChange, onSave, onSaveOnly, onBack, notice, saved }) {
+  const updateResponse = (index, value) => {
+    const next = [...responses];
+    next[index] = value;
+    onChange(next);
+  };
   return <>
     <section className="hero"><div className="hero-kicker">PUBLIC HEALTH PERSPECTIVE <span>·</span> FOUNDATION</div><h1>Foundation <span>—</span> Public health palliative care</h1><p>{foundationStage.intro}</p></section>
     <section className="foundation-grid">
@@ -375,12 +402,13 @@ function FoundationView({ response, onChange, onSave, onSaveOnly, onBack, notice
         <div className="card-label"><span className="label-icon">B</span><div><small>CARD B</small><h2>What does a strong public health approach look like?</h2></div></div>
         <p>Share your thoughts on what would strengthen palliative care across Tayside.</p>
         <div className="foundation-questions">
-          <p>💬 What does a strong public health palliative care approach look like in Tayside?</p>
-          <p>💬 What helps people before, alongside and beyond formal services?</p>
-          <p>💬 What strengths already exist in our communities that we should build upon?</p>
-          <p>💬 Where do we need to increase confidence, connection and compassion to better support people through serious illness, dying and bereavement?</p>
+          {foundationQuestions.map((question, i) => (
+            <div className="foundation-question-item" key={i}>
+              <p>💬 {question}</p>
+              <textarea className="foundation-question-textarea" value={responses[i] || ""} onChange={(e) => updateResponse(i, e.target.value)} placeholder="Capture your thoughts, ideas, examples or opportunities..." />
+            </div>
+          ))}
         </div>
-        <label className="card-text-label">Your thoughts <span>Required</span><textarea className="foundation-textarea" value={response} onChange={(e) => onChange(e.target.value)} placeholder="Capture your thoughts, ideas, examples or opportunities..." required /></label>
       </article>
     </section>
     {notice && <div className="notice foundation-notice" role="alert">{notice}</div>}
@@ -426,12 +454,13 @@ function BridgeView({ bridge, index, response, onToken, onAllocationReference, o
   </>;
 }
 
-function Review({ totals, totalSpent, responses, foundationResponse, onXlsx, onPrint, delegateName, setDelegateName, submitState, onSubmit }) {
+function Review({ totals, totalSpent, responses, foundationResponses, onXlsx, onPrint, delegateName, setDelegateName, submitState, onSubmit }) {
   const narratives = bridges.reduce((sum, _, b) => sum + cardKeys.filter((k) => responses[b].cards[k].narrative.trim()).length, 0);
+  const foundationText = foundationHasContent(foundationResponses) ? foundationDisplay(foundationResponses) : "";
   return <section className="review-page">
     <div className="hero"><div className="hero-kicker">WORKSHOP CLOSE</div><h1>Review <span>—</span> your collective priorities</h1><p>Review your investment across the whole journey, then submit your responses to the facilitator and export a shareable record.</p></div>
     <div className="review-summary"><div><span className="eyebrow">TOTAL ALLOCATED</span><strong>{totalSpent}<small> / 20 tokens</small></strong><p>{20 - totalSpent} tokens remain unallocated.</p></div><div className="summary-bars">{tokenTypes.map((type) => <div className="summary-bar" key={type.id}><div><span className={`token-dot ${type.color}`} /><strong>{type.label}</strong><b>{totals[type.id]} / {type.limit}</b></div><div className="meter"><span className={type.color} style={{ width: `${(totals[type.id] / type.limit) * 100}%` }} /></div></div>)}</div></div>
-    <div className="review-table-wrap foundation-review"><div className="section-heading"><div><span className="eyebrow">FOUNDATION</span><h2>Public health palliative care</h2></div></div><div className="foundation-review-response"><strong>Card B — delegate reflection</strong><p>{foundationResponse || "No Foundation reflection captured."}</p></div></div>
+    <div className="review-table-wrap foundation-review"><div className="section-heading"><div><span className="eyebrow">FOUNDATION</span><h2>Public health palliative care</h2></div></div><div className="foundation-review-response"><strong>Card B — delegate reflection</strong><p>{foundationText || "No Foundation reflection captured."}</p></div></div>
     <div className="review-table-wrap"><div className="section-heading"><div><span className="eyebrow">FULL JOURNEY</span><h2>Bridge-by-bridge, card-by-card</h2></div><span className="review-count">{narratives} narratives captured</span></div>
       <div className="review-table">
         <div className="table-row table-head"><span>Bridge & card</span>{tokenTypes.map((type) => <span key={type.id}>{type.short}</span>)}<span>Total</span><span>Response details</span></div>
@@ -518,7 +547,7 @@ function FacilitatorView() {
 
   const downloadAggregateXlsx = () => {
     const rows = [["Stage", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "What specifically are you allocating your tokens to?", "Why are you allocating your tokens here?"]];
-    rows.push(["Foundation", "Card B", "Public health palliative care", 0, 0, 0, 0, 0, "", aggregate.foundationNarratives.map((n) => `${n.delegate || "Anonymous"}: ${n.narrative}`).join(" | ").replaceAll("\n", " ")]);
+    rows.push(["Foundation", "Card B", "Public health palliative care", 0, 0, 0, 0, 0, "", aggregate.foundationNarratives.map((n) => `${n.delegate || "Anonymous"}: ${foundationDisplay(narrativeToFoundation(n.narrative))}`).join(" | ").replaceAll("\n", " ")]);
     bridges.forEach((bridge, b) => cardKeys.forEach((k) => {
       const meta = cardMeta.find((c) => c.key === k);
       const agg = aggregate.byBridgeCard[`${b}-${k}`] || { celebration: 0, improvement: 0, transformation: 0, connect: 0, narratives: [] };
@@ -534,7 +563,7 @@ function FacilitatorView() {
     const rows = [["Delegate", "Stage", "Card", "Card Focus", "Celebration", "Improvement", "Transformation", "Connect Better", "Total", "What specifically are you allocating your tokens to?", "Why are you allocating your tokens here?"]];
     cards.filter((c) => c.bridge_index === -1).forEach((c) => {
       const sub = submissions.find((s) => s.id === c.submission_id);
-      rows.push([sub?.delegate_name || "Anonymous", "Foundation", "Card B", "Public health palliative care", 0, 0, 0, 0, 0, "", (c.narrative || "").replaceAll("\n", " ")]);
+      rows.push([sub?.delegate_name || "Anonymous", "Foundation", "Card B", "Public health palliative care", 0, 0, 0, 0, 0, "", foundationDisplay(narrativeToFoundation(c.narrative)).replaceAll("\n", " ")]);
     });
     cards.filter((c) => c.bridge_index !== -1).forEach((c) => {
       const sub = submissions.find((s) => s.id === c.submission_id);
@@ -584,7 +613,7 @@ function FacilitatorView() {
     </div>
     <div className="review-table-wrap narratives-section"><div className="section-heading"><div><span className="eyebrow">ALL NARRATIVES</span><h2>Delegate suggestions by bridge & card</h2></div></div>
       <div className="narratives-list">
-        {aggregate.foundationNarratives.length > 0 && <div className="narrative-block foundation-narrative-block"><div className="narrative-block-head"><span className="bridge-tag">Foundation · Card B</span><strong>Public health palliative care</strong><small>Delegate reflections</small></div>{aggregate.foundationNarratives.map((n, i) => <div className="narrative-item" key={i}><span className="delegate-name">{n.delegate || "Anonymous"}</span><p>{n.narrative}</p></div>)}</div>}
+        {aggregate.foundationNarratives.length > 0 && <div className="narrative-block foundation-narrative-block"><div className="narrative-block-head"><span className="bridge-tag">Foundation · Card B</span><strong>Public health palliative care</strong><small>Delegate reflections</small></div>{aggregate.foundationNarratives.map((n, i) => <div className="narrative-item" key={i}><span className="delegate-name">{n.delegate || "Anonymous"}</span><p>{foundationDisplay(narrativeToFoundation(n.narrative))}</p></div>)}</div>}
         {bridges.map((bridge, b) => cardKeys.map((k) => {
           const meta = cardMeta.find((c) => c.key === k);
           const agg = aggregate.byBridgeCard[`${b}-${k}`];
