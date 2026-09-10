@@ -1,1 +1,0 @@
-ALTER TABLE submission_cards ADD COLUMN IF NOT EXISTS allocation_reference text DEFAULT '';
