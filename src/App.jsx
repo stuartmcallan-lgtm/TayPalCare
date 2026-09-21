@@ -18,16 +18,18 @@ const cardMeta = [
 
 const foundationStage = {
   title: "Foundation",
-  intro: "A public health perspective creates the conditions for people, families and communities to be supported before, alongside and beyond formal palliative care services."
+  intro: "When people are dealing with death, dying and bereavement, they need some personal knowledge of how to respond, and they need support from their friends, families and communities. By taking a public health approach to palliative care, NHS Tayside can create the conditions for people to receive this support."
 };
 
 const foundationExamples = [
-  "Compassionate Communities approaches",
-  "End of Life Aid Skills for Everyone (EASE)",
+  "Giving people knowledge, skills and confidence to deal with end of life care matters through public education, eg the End of Life Aid Skills for Everyone (EASE) public education course",
+  "Creating opportunities for people to talk and learn about death, dying and bereavement, for example through Demystifying Death Week and To Absent Friends events",
+  "Enabling people to discuss and make plans for changes in their health, for example through Future Care Planning, RESPECT and DNACPR documentation",
+  "Providing public-facing information (eg www.goodlifedeathgrief.org.uk) and places people can go to ask questions, eg Funeral Link, Citizen's Advice",
+  "Enabling communities such as schools and workplaces to better support people who are caring, dying or grieving, for example through the Bereavement Charter Mark for Schools and Workplaces",
+  "Creating places and spaces where people can give and receive support as peers, for example through Maggie's Centres, Carer Support Networks, bereavement peer support groups eg Life after Loss",
   "Community-led support and volunteering",
-  "Carer support networks",
   "Local third-sector and hospice partnerships",
-  "Public conversation about death, dying and bereavement",
 ];
 
 const foundationQuestions = [
@@ -395,7 +397,7 @@ function FoundationView({ responses, onChange, onSave, onSaveOnly, onBack, notic
     <section className="foundation-grid">
       <article className="card foundation-card foundation-examples">
         <div className="card-label"><span className="label-icon">A</span><div><small>CARD A</small><h2>Examples in Scotland & Tayside</h2></div></div>
-        <p>Some examples in Scotland and Tayside of public health perspective of Palliative Care:</p>
+        <p>Some examples in Scotland and Tayside of public health approaches of Palliative Care:</p>
         <ul>{foundationExamples.map((item) => <li key={item}>{item}</li>)}</ul>
       </article>
       <article className="card foundation-card foundation-reflection">
