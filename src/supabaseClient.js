@@ -1,117 +1,109 @@
-// Local browser storage — replaces Supabase for all workshop data.
-// Submissions and card rows are persisted in localStorage.
+import { createClient } from "@supabase/supabase-js";
 
-const SUBMISSIONS_KEY = "tayside-submissions";
-const CARDS_KEY = "tayside-submission-cards";
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-function readSubmissions() {
-  try {
-    return JSON.parse(localStorage.getItem(SUBMISSIONS_KEY) || "[]");
-  } catch {
-    return [];
-  }
-}
-
-function writeSubmissions(subs) {
-  localStorage.setItem(SUBMISSIONS_KEY, JSON.stringify(subs));
-}
-
-function readCards() {
-  try {
-    return JSON.parse(localStorage.getItem(CARDS_KEY) || "[]");
-  } catch {
-    return [];
-  }
-}
-
-function writeCards(cards) {
-  localStorage.setItem(CARDS_KEY, JSON.stringify(cards));
-}
-
-function genId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-const listeners = new Set();
-
-function notifyChange() {
-  listeners.forEach((fn) => fn());
-}
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export const localDb = {
-  createSubmission(delegateName, payload) {
-    const subs = readSubmissions();
-    const sub = {
-      id: genId(),
-      delegate_name: delegateName || null,
-      submitted_at: new Date().toISOString(),
-      payload: payload || {},
-    };
-    subs.push(sub);
-    writeSubmissions(subs);
-    notifyChange();
-    return sub;
+  async createSubmission(delegateName, payload) {
+    const { data, error } = await supabase
+      .from("submissions")
+      .insert({
+        delegate_name: delegateName || null,
+        payload: payload || {},
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
   },
 
-  updateSubmission(id, updates) {
-    const subs = readSubmissions();
-    const idx = subs.findIndex((s) => s.id === id);
-    if (idx >= 0) {
-      subs[idx] = { ...subs[idx], ...updates };
-      writeSubmissions(subs);
-      notifyChange();
-    }
+  async updateSubmission(id, updates) {
+    const { error } = await supabase
+      .from("submissions")
+      .update(updates)
+      .eq("id", id);
+    if (error) throw error;
   },
 
-  getAllSubmissions() {
-    return readSubmissions().sort((a, b) =>
-      (b.submitted_at || "").localeCompare(a.submitted_at || "")
-    );
+  async getAllSubmissions() {
+    const { data, error } = await supabase
+      .from("submissions")
+      .select("*")
+      .order("submitted_at", { ascending: false });
+    if (error) throw error;
+    return data || [];
   },
 
-  getCardsBySubmission(submissionId) {
-    return readCards().filter((c) => c.submission_id === submissionId);
+  async getCardsBySubmission(submissionId) {
+    const { data, error } = await supabase
+      .from("submission_cards")
+      .select("*")
+      .eq("submission_id", submissionId);
+    if (error) throw error;
+    return data || [];
   },
 
-  getAllCards() {
-    return readCards();
+  async getAllCards() {
+    const { data, error } = await supabase
+      .from("submission_cards")
+      .select("*")
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
   },
 
-  upsertCard(card) {
-    const cards = readCards();
-    const idx = cards.findIndex(
-      (c) =>
-        c.submission_id === card.submission_id &&
-        c.bridge_index === card.bridge_index &&
-        c.card_key === card.card_key
-    );
-    if (idx >= 0) {
-      cards[idx] = { ...cards[idx], ...card, id: cards[idx].id };
+  async upsertCard(card) {
+    const { data: existing } = await supabase
+      .from("submission_cards")
+      .select("id")
+      .eq("submission_id", card.submission_id)
+      .eq("bridge_index", card.bridge_index)
+      .eq("card_key", card.card_key)
+      .maybeSingle();
+
+    if (existing) {
+      const { error } = await supabase
+        .from("submission_cards")
+        .update({
+          celebration: card.celebration,
+          improvement: card.improvement,
+          transformation: card.transformation,
+          connect: card.connect,
+          allocation_reference: card.allocation_reference,
+          narrative: card.narrative,
+        })
+        .eq("id", existing.id);
+      if (error) throw error;
     } else {
-      cards.push({ ...card, id: genId() });
+      const { error } = await supabase.from("submission_cards").insert(card);
+      if (error) throw error;
     }
-    writeCards(cards);
-    notifyChange();
   },
 
-  insertCard(card) {
-    const cards = readCards();
-    cards.push({ ...card, id: genId() });
-    writeCards(cards);
-    notifyChange();
+  async insertCard(card) {
+    const { error } = await supabase.from("submission_cards").insert(card);
+    if (error) throw error;
   },
 
   subscribe(callback) {
-    listeners.add(callback);
-    const handler = (e) => {
-      if (e.key === SUBMISSIONS_KEY || e.key === CARDS_KEY) {
-        callback();
-      }
-    };
-    window.addEventListener("storage", handler);
+    const channel = supabase
+      .channel("submission_cards_changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "submission_cards" },
+        callback
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "submissions" },
+        callback
+      )
+      .subscribe();
+
     return () => {
-      listeners.delete(callback);
-      window.removeEventListener("storage", handler);
+      supabase.removeChannel(channel);
     };
   },
 };

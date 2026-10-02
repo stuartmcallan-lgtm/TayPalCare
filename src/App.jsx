@@ -120,36 +120,44 @@ function DelegateView() {
 
   useEffect(() => {
     if (!submissionId) return;
-    const data = localDb.getCardsBySubmission(submissionId);
-    if (!data?.length) return;
-    setResponses((current) => {
-      const next = { ...current };
-      data.forEach((row) => {
-        if (row.bridge_index === -1 && row.card_key === "B") {
-          setFoundationResponses(narrativeToFoundation(row.narrative));
-          return;
-        }
-        if (!next[row.bridge_index]?.cards?.[row.card_key]) return;
-        next[row.bridge_index] = {
-          ...next[row.bridge_index],
-          saved: true,
-          cards: {
-            ...next[row.bridge_index].cards,
-            [row.card_key]: {
-              tokens: {
-                celebration: row.celebration || 0,
-                improvement: row.improvement || 0,
-                transformation: row.transformation || 0,
-                connect: row.connect || 0,
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await localDb.getCardsBySubmission(submissionId);
+        if (cancelled || !data?.length) return;
+        setResponses((current) => {
+          const next = { ...current };
+          data.forEach((row) => {
+            if (row.bridge_index === -1 && row.card_key === "B") {
+              setFoundationResponses(narrativeToFoundation(row.narrative));
+              return;
+            }
+            if (!next[row.bridge_index]?.cards?.[row.card_key]) return;
+            next[row.bridge_index] = {
+              ...next[row.bridge_index],
+              saved: true,
+              cards: {
+                ...next[row.bridge_index].cards,
+                [row.card_key]: {
+                  tokens: {
+                    celebration: row.celebration || 0,
+                    improvement: row.improvement || 0,
+                    transformation: row.transformation || 0,
+                    connect: row.connect || 0,
+                  },
+                  allocationReference: row.allocation_reference || "",
+                  narrative: row.narrative || "",
+                },
               },
-              allocationReference: row.allocation_reference || "",
-              narrative: row.narrative || "",
-            },
-          },
-        };
-      });
-      return next;
-    });
+            };
+          });
+          return next;
+        });
+      } catch (err) {
+        console.error("Failed to load saved responses:", err);
+      }
+    })();
+    return () => { cancelled = true; };
   }, [submissionId]);
 
   useEffect(() => {
@@ -231,12 +239,12 @@ function DelegateView() {
     if (isFoundation) {
       let id = submissionId;
       if (!id) {
-        const sub = localDb.createSubmission(delegateName.trim() || null, {});
+        const sub = await localDb.createSubmission(delegateName.trim() || null, {});
         id = sub.id;
         setSubmissionId(id);
         try { localStorage.setItem("tayside-workshop-submission-id", id); } catch {}
       }
-      localDb.upsertCard({
+      await localDb.upsertCard({
         submission_id: id,
         bridge_index: -1,
         card_key: "B",
@@ -247,7 +255,7 @@ function DelegateView() {
         allocation_reference: "",
         narrative: foundationToNarrative(foundationResponses),
       });
-      localDb.updateSubmission(id, { delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() });
+      await localDb.updateSubmission(id, { delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() });
       return;
     }
     const fullPayload = {};
@@ -255,12 +263,12 @@ function DelegateView() {
       fullPayload[bridgeIndex] = responses[bridgeIndex].cards;
     });
     if (!submissionId) {
-      const sub = localDb.createSubmission(delegateName.trim() || null, fullPayload);
+      const sub = await localDb.createSubmission(delegateName.trim() || null, fullPayload);
       setSubmissionId(sub.id);
       try { localStorage.setItem("tayside-workshop-submission-id", sub.id); } catch {}
-      cardKeys.forEach((k) => {
+      for (const k of cardKeys) {
         const card = responses[activeBridge].cards[k];
-        localDb.insertCard({
+        await localDb.insertCard({
           submission_id: sub.id,
           bridge_index: activeBridge,
           card_key: k,
@@ -271,11 +279,11 @@ function DelegateView() {
           allocation_reference: card.allocationReference,
           narrative: card.narrative,
         });
-      });
+      }
     } else {
-      cardKeys.forEach((k) => {
+      for (const k of cardKeys) {
         const card = responses[activeBridge].cards[k];
-        localDb.upsertCard({
+        await localDb.upsertCard({
           submission_id: submissionId,
           bridge_index: activeBridge,
           card_key: k,
@@ -286,8 +294,8 @@ function DelegateView() {
           allocation_reference: card.allocationReference,
           narrative: card.narrative,
         });
-      });
-      localDb.updateSubmission(submissionId, { payload: fullPayload, delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() });
+      }
+      await localDb.updateSubmission(submissionId, { payload: fullPayload, delegate_name: delegateName.trim() || null, submitted_at: new Date().toISOString() });
     }
     setResponses((r) => ({ ...r, [activeBridge]: { ...r[activeBridge], saved: true } }));
   };
@@ -329,7 +337,7 @@ function DelegateView() {
     setSubmitState({ status: "submitting", message: "" });
     try {
       if (delegateName.trim() && submissionId) {
-        localDb.updateSubmission(submissionId, { delegate_name: delegateName.trim() });
+        await localDb.updateSubmission(submissionId, { delegate_name: delegateName.trim() });
       }
       setSubmitState({ status: "success", message: "Your responses have been submitted. Thank you!" });
     } catch (err) {
@@ -478,7 +486,7 @@ function Review({ totals, totalSpent, responses, foundationResponses, onXlsx, on
     </div>
     <div className="submit-card">
       <div className="section-heading"><div><span className="eyebrow">SUBMIT TO FACILITATOR</span><h2>Send your responses</h2></div></div>
-      <p className="submit-desc">Your token allocations and narratives have been saved in your browser as you progressed. Submit to confirm your responses.</p>
+      <p className="submit-desc">Your token allocations and narratives have been saved as you progressed. Submit to confirm your responses.</p>
       <label className="name-label">Your name (optional)<input type="text" value={delegateName} onChange={(e) => setDelegateName(e.target.value)} placeholder="e.g. Dr Jane Smith" /></label>
       {submitState.status === "error" && <div className="notice" role="alert">{submitState.message}</div>}
       {submitState.status === "success" && <div className="success-notice" role="status">{submitState.message}</div>}
@@ -495,16 +503,20 @@ function FacilitatorView() {
   const [error, setError] = useState("");
   const [livePulse, setLivePulse] = useState(false);
   useEffect(() => {
-    const loadData = () => {
+    let cancelled = false;
+    const loadData = async () => {
       try {
-        const subs = localDb.getAllSubmissions();
-        const cardRows = localDb.getAllCards();
+        const [subs, cardRows] = await Promise.all([
+          localDb.getAllSubmissions(),
+          localDb.getAllCards(),
+        ]);
+        if (cancelled) return;
         setSubmissions(subs);
         setCards(cardRows);
       } catch (err) {
-        setError("Could not load results. Please try again.");
+        if (!cancelled) setError("Could not load results. Please try again.");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
@@ -517,6 +529,7 @@ function FacilitatorView() {
     });
 
     return () => {
+      cancelled = true;
       unsubscribe();
     };
   }, []);
